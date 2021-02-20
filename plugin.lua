@@ -1,4 +1,4 @@
-debug = "hi"
+--debug = "hi"
 
 function draw()
     imgui.Begin("Vibrato")
@@ -11,6 +11,7 @@ function draw()
     local amplitude = state.GetValue("amplitude") or 1
     local stopamplitude = state.GetValue("stopamplitude") or 0
     local increment = state.GetValue("increment") or 10
+    local tp_increment = state.GetValue("tp_increment") or .125
 
     local useSnap = state.GetValue("useSnap") or false
 
@@ -18,9 +19,10 @@ function draw()
     _, start = imgui.InputFloat("Start", start, 1)
     if imgui.Button("Current##1") then stop = state.SongTime end imgui.SameLine()
     _, stop = imgui.InputFloat("Stop", stop, 1)
-    _, amplitude = imgui.InputFloat("Amplitude", amplitude, 1)
-    _, stopamplitude = imgui.InputFloat("stopamplitude", stopamplitude, 1)
+    _, amplitude = imgui.InputFloat("Start Amplitude", amplitude, 1)
+    _, stopamplitude = imgui.InputFloat("Stop Amplitude", stopamplitude, 1)
     _, increment = imgui.InputFloat("Increment", increment, 1)
+    _, tp_increment = imgui.InputFloat("Teleport Increment", tp_increment, .125)
 
     _, useSnap = imgui.Checkbox("Treat increment as 1/n beat snap", useSnap)
 
@@ -29,36 +31,38 @@ function draw()
     state.SetValue("amplitude", amplitude)
     state.SetValue("stopamplitude", stopamplitude)
     state.SetValue("increment", increment)
+    state.SetValue("tp_increment", tp_increment)
 
     state.SetValue("useSnap", useSnap)
 
     if imgui.Button("vibe") then
         if useSnap then
-            vibe(start, stop, amplitude, 60000 / map.GetTimingPointAt(state.SongTime).Bpm / increment, stopamplitude)
+            vibe(start, stop, amplitude, 60000 / map.GetTimingPointAt(state.SongTime).Bpm / increment, stopamplitude, tp_increment)
         else
-            vibe(start, stop, amplitude, increment, stopamplitude)
+            vibe(start, stop, amplitude, increment, stopamplitude, tp_increment)
         end
     end
 
-    imgui.Text(debug)
+    --imgui.Text(debug)
 
     performQueue()
     imgui.End()
 end
 
-function vibe(start, stop, amplitude, increment, stopamplitude)
+function vibe(start, stop, amplitude, increment, stopamplitude, tp_increment)
     local time = start
     local direction = 1
     local slope = (stopamplitude - amplitude) / ((stop - start) / increment / 2)
 
     while time < stop do
-        increaseSV(time, amplitude * direction)
+        increaseSV(time, amplitude / tp_increment * direction)
+        increaseSV(time + tp_increment, 0)
         time = time + increment
-        direction = direction * -1
         amplitude = direction == 1 and amplitude or amplitude + slope
+        direction = direction * -1
     end
     increaseSV(stop, 0)
-    debug = amplitude
+    --debug = amplitude
 end
 
 function queue(type, arg1, arg2, arg3, arg4)
