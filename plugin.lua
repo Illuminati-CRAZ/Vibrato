@@ -105,7 +105,7 @@ function vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, on
     end
     
     --restore displacement to 0 at end
-    time = stop
+    time = stop - increment
     target = 0
     increaseSV(time - tp_increment, (target - displacement) / tp_increment)
     increaseSV(time, 0)
