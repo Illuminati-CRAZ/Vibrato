@@ -3,6 +3,7 @@ debug = "hi"
 function draw()
     imgui.Begin("Vibrato")
     resetQueue()
+    resetCache()
 
     state.IsWindowHovered = imgui.IsWindowHovered()
 
@@ -48,6 +49,7 @@ function draw()
         --store old positions
         local noteTimes = getNoteTimesDuringPeriod(start, stop)
         local notePositions = {}
+        
         if preserveNotePositions then
             for _, time in pairs(noteTimes) do
                 table.insert(notePositions, getPositionFromTime(time))
@@ -61,14 +63,20 @@ function draw()
             vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, oneSided)
         end
         
-        performQueue()
-        resetQueue()
-        
         --restore positions
         if preserveNotePositions then
+            
+            performQueue()
+            resetQueue()
+            resetCache()
+        
+            --create a list of sorted svs, since when there are many svs,
+            --there is a chance the game doesn't sort the svs in time
+            local sorted_svs = table.sort(map.ScrollVelocities, function(a, b) return a.StartTime < b.StartTime end)
+        
             local newPositions = {}
             for _, time in pairs(noteTimes) do
-                table.insert(newPositions, getPositionFromTime(time))
+                table.insert(newPositions, getPositionFromTime(time, sorted_svs))
             end
             
             for i = 1, #noteTimes do
@@ -83,23 +91,27 @@ function draw()
     imgui.End()
 end
 
+function sv(time, multiplier) return utils.CreateScrollVelocity(time, multiplier) end
+
 function vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, oneSided)
+    local svs = {}
+    
     local slope = (stopamplitude - amplitude) / ((stop - start) / increment)
     local target = amplitude
     local displacement = 0
-
+    
     for i = 0, (stop - start) / increment - 1 do
         local time = start + i * increment
         
         if oneSided and i % 2 == 1 then
-            increaseSV(time, (0 - displacement) / tp_increment)
+            table.insert(svs, sv(time, (0 - displacement) / tp_increment))
             displacement = 0
         else
-            increaseSV(time, (target - displacement) / tp_increment)
+            table.insert(svs, sv(time, (target - displacement) / tp_increment))
             displacement = target
         end
-        increaseSV(time + tp_increment, 0)
-
+        table.insert(svs, sv(time + tp_increment, 0))
+        
         target = (target + slope) * -1
         slope = slope * -1
     end
@@ -107,44 +119,68 @@ function vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, on
     --restore displacement to 0 at end
     time = stop - increment
     target = 0
-    increaseSV(time - tp_increment, (target - displacement) / tp_increment)
-    increaseSV(time, 0)
+    table.insert(svs, sv(time - tp_increment, (target - displacement) / tp_increment))
+    table.insert(svs, sv(time, 0))
     
-    debug = target
+    mergeSVs(svs)
 end
 
 function displace(time, displacement, increment)
-    increaseSV(time - increment, displacement / increment)
-    increaseSV(time, -1 * displacement / increment)
-    increaseSV(time + increment, 0)
+    local svs = {}
+    table.insert(svs, sv(time - increment, displacement / increment))
+    table.insert(svs, sv(time, -1 * displacement / increment))
+    table.insert(svs, sv(time + increment, 0))
+    
+    mergeSVs(svs)
 end
 
---can be optimized by caching positions for multiple uses in one frame
-function getPositionFromTime(time)
-    local svs = map.ScrollVelocities
+function resetCache()
+    position_cache = {}
+end
 
+function getPositionFromTime(time, svs)
+    --for some reason, after adding svs to the map,
+    --if there are enough svs, the svs will take too long to be sorted by the game
+    --and as a result, position would be calculated incorrectly
+    --this can be prevented by supplying a custom sorted list of svs
+    local svs = svs or map.ScrollVelocities
+    
     if #svs == 0 or time < svs[1].StartTime then
         return math.floor(time * 100)
     end
-
-    local position = math.floor(svs[1].StartTime * 100)
-
-    local i = 2
-
-    while i <= #svs do
-        if time < svs[i].StartTime then
-            break
-        else
-            position = position + math.floor((svs[i].StartTime - svs[i - 1].StartTime) * svs[i - 1].Multiplier * 100)
-        end
-
-        i = i + 1
-    end
-
-    i = i - 1
-
+    
+    local i = getScrollVelocityIndexAt(time, svs)
+    local position = getPositionFromScrollVelocityIndex(i, svs)
     position = position + math.floor((time - svs[i].StartTime) * svs[i].Multiplier * 100)
     return position
+end
+
+function getPositionFromScrollVelocityIndex(i, svs)
+    if i < 1 then return end
+    
+    local position = position_cache[i]
+    if i == 1 then position = math.floor(svs[1].StartTime * 100) end
+    
+    if not position then
+        svs = svs or map.ScrollVelocities
+        position = getPositionFromScrollVelocityIndex(i - 1, svs) + 
+                 math.floor((svs[i].StartTime - svs[i - 1].StartTime) * svs[i - 1].Multiplier * 100)
+        position_cache[i] = position
+    end
+
+    return position
+end
+
+function getScrollVelocityIndexAt(time, svs)
+    svs = svs or map.ScrollVelocities
+    table.insert(svs, sv(1e304, 1))
+    
+    i = 1
+    while svs[i].StartTime <= time do
+        i = i + 1
+    end
+    
+    return i - 1
 end
 
 function getNoteTimesDuringPeriod(start, stop)
@@ -185,23 +221,57 @@ function queue(type, arg1, arg2, arg3, arg4)
 end
 
 function resetQueue()
-    action_queue = {}
-    add_sv_queue = {}
+    action_queue = {} --list of actions
+    add_sv_queue = {} --list of svs
+    remove_sv_queue = {} --list of svs
 end
 
 function performQueue()
+    --create batch actions and add them to queue
+    if #remove_sv_queue > 0 then queue(action_type.RemoveScrollVelocityBatch, remove_sv_queue) end
     if #add_sv_queue > 0 then queue(action_type.AddScrollVelocityBatch, add_sv_queue) end
+    
+    --perform actions in queue
     if #action_queue > 0 then actions.PerformBatch(action_queue) end
 end
 
-function increaseSV(time, multiplier)
-    --assuming initial sv multiplier is 1
-    local sv = map.GetScrollVelocityAt(time) or utils.CreateScrollVelocity(-1e309, 1)
-
-    if sv.StartTime == time then
-        queue(action_type.ChangeScrollVelocityMultiplierBatch, {sv}, sv.Multiplier + multiplier)
+function mergeSVs(svs)
+    --for each sv given, increase map sv if no sv at that time
+    for _, sv in pairs(svs) do
+        --assumes initial scroll velocity is 1
+        local mapsv = map.GetScrollVelocityAt(sv.StartTime) or utils.CreateScrollVelocity(-1e304, 1)
+        if mapsv.StartTime ~= sv.StartTime then
+            table.insert(add_sv_queue, utils.CreateScrollVelocity(sv.StartTime, mapsv.Multiplier + sv.Multiplier))
+        end
+    end
+    
+    --merging starts at first given sv, with map sv's before not changing
+    local start = svs[1].StartTime
+    
+    --merging stops at last sv if last sv has velocity 0, otherwise stops at an sv with time infinity and velocity 0
+    local stop
+    if svs[#svs].Multiplier == 0 then
+        stop = svs[#svs].StartTime
     else
-        local newsv = utils.CreateScrollVelocity(time, sv.Multiplier + multiplier)
-        table.insert(add_sv_queue, newsv)
+        table.insert(svs, utils.CreateScrollVelocity(1e304, 0))
+        stop = 1e304
+    end
+
+    local i = 1 --for keeping track of the relevant given sv
+    
+    --for each map sv within [start, stop), change according to relevant given sv
+    for _, mapsv in pairs(map.ScrollVelocities) do
+        if start <= mapsv.StartTime and mapsv.StartTime < stop then
+            --make sure current map sv is between relevant given sv and next given sv
+            while mapsv.StartTime >= svs[i+1].StartTime do
+                i = i + 1
+            end
+            
+            --in extreme cases with a bunch of different svs
+            --removing then adding should be more efficient than directly changing
+            --https://discord.com/channels/354206121386573824/810908988160999465/815724948256456704
+            table.insert(remove_sv_queue, mapsv)
+            table.insert(add_sv_queue, utils.CreateScrollVelocity(mapsv.StartTime, mapsv.Multiplier + svs[i].Multiplier))
+        end
     end
 end
