@@ -1,2 +1,2 @@
 # Vibrato
-notes do be vibin'
+notes go brrrr or something idk
