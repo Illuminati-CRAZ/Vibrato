@@ -102,7 +102,7 @@ function vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, on
     local target = amplitude
     local displacement = 0
     
-    for i = 0, (stop - start) / increment - 1 do
+    for i = 0, (stop - start - 1) / increment do
         local time = start + i * increment
         
         if oneSided and i % 2 == 1 then
