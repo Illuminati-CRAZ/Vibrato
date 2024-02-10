@@ -1,3 +1,4 @@
+---@diagnostic disable: lowercase-global
 debug = "hi"
 
 function draw()
@@ -21,9 +22,10 @@ function draw()
     local oneSided = state.GetValue("oneSided")
     if oneSided == nil then oneSided = false end
 
-    if imgui.Button("Current") then start = state.SelectedHitObjects[1] and state.SelectedHitObjects[1].StartTime or state.SongTime end imgui.SameLine()
+    if (imgui.Button("Current") or utils.IsKeyPressed(keys.Q)) then start = state.SelectedHitObjects[1] and state.SelectedHitObjects[1].StartTime or state.SongTime end imgui.SameLine()
     _, start = imgui.InputFloat("Start", start, 1)
-    if imgui.Button("Current##1") then stop = state.SelectedHitObjects[1] and state.SelectedHitObjects[1].StartTime or state.SongTime end imgui.SameLine()
+    lastNoteIndex = #state.SelectedHitObjects
+    if (imgui.Button("Current##1") or utils.IsKeyPressed(keys.W)) then stop = state.SelectedHitObjects[lastNoteIndex] and state.SelectedHitObjects[lastNoteIndex].StartTime or state.SongTime end imgui.SameLine()
     _, stop = imgui.InputFloat("Stop", stop, 1)
     _, amplitude = imgui.InputFloat("Start Amplitude", amplitude, 1)
     _, stopamplitude = imgui.InputFloat("Stop Amplitude", stopamplitude, 1)
@@ -45,52 +47,79 @@ function draw()
     state.SetValue("preserveNotePositions", preserveNotePositions)
     state.SetValue("oneSided", oneSided)
 
-    if imgui.Button("vibe") then
-        --store old positions
-        local noteTimes = getNoteTimesDuringPeriod(start, stop)
-        local notePositions = {}
-        
-        if preserveNotePositions then
-            for _, time in pairs(noteTimes) do
-                table.insert(notePositions, getPositionFromTime(time))
-            end
-            
-            debug = notePositions[1] or "error"
+    if imgui.Button("vibe") or utils.IsKeyPressed(keys.E) then
+        vibratoSetup(start, stop, amplitude, increment, stopamplitude, tp_increment, oneSided, preserveNotePositions, useSnap)
+    end
+    imgui.SameLine();
+    if imgui.Button("vibe per section (selected notes only)") or utils.IsKeyPressed(keys.R) then
+      if (#state.SelectedHitObjects >= 2) then
+        groups = convertObjectsToRanges(state.SelectedHitObjects)
+        for _, group in pairs(groups) do
+          vibratoSetup(group.startTime, group.endTime, amplitude, increment, stopamplitude, tp_increment, oneSided, preserveNotePositions, useSnap)
         end
-        
-        --vibe
-        increment = useSnap and 60000 / map.GetTimingPointAt(state.SongTime).Bpm / increment or increment
-        vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, oneSided)
-        
-        --restore positions
-        if preserveNotePositions then
-            local old_sv_count = #map.ScrollVelocities
-            
-            performQueue()
-            resetQueue()
-            resetCache()
-        
-            --with enough SVs, the game is unable to sort added SVs in time
-            --local sorted_svs = correctSVIndexsAtEnd(map.ScrollVelocities, old_sv_count + 1)
-            local sorted_svs = table.sort(map.ScrollVelocities, function(a, b) return a.StartTime < b.StartTime end)
-            
-            local newPositions = {}
-            for _, time in pairs(noteTimes) do
-                table.insert(newPositions, getPositionFromTime(time, sorted_svs))
-            end
-            
-            debug = debug .. ", " .. newPositions[1] or "error"
-            
-            for i = 1, #noteTimes do
-                displace(noteTimes[i], (notePositions[i] - newPositions[i]) / 100, tp_increment, sorted_svs)
-            end
-        end
+      end
     end
 
     imgui.Text(debug)
     performQueue()
 
     imgui.End()
+end
+
+function convertObjectsToRanges(hitObjects)
+  noteTimes = {}
+  for _, v in pairs(hitObjects) do
+    table.insert(noteTimes, v.startTime)
+  end
+
+  groups = {}
+  for i=1, #noteTimes - 1 do
+    table.insert(groups, {startTime = noteTimes[i], endTime = noteTimes[i + 1]})
+  end
+
+  return groups
+end
+
+function vibratoSetup(start, stop, amplitude, increment, stopamplitude, tp_increment, oneSided, preserveNotePositions, useSnap)
+  --store old positions
+  local noteTimes = getNoteTimesDuringPeriod(start, stop)
+  local notePositions = {}
+  
+  if preserveNotePositions then
+      for _, time in pairs(noteTimes) do
+          table.insert(notePositions, getPositionFromTime(time))
+      end
+      
+      debug = notePositions[1] or "error"
+  end
+  
+  --vibe
+  increment = useSnap and 60000 / map.GetTimingPointAt(state.SongTime).Bpm / increment or increment
+  vibe(start, stop, amplitude, increment, stopamplitude, tp_increment, oneSided)
+  
+  --restore positions
+  if preserveNotePositions then
+      local old_sv_count = #map.ScrollVelocities
+      
+      performQueue()
+      resetQueue()
+      resetCache()
+  
+      --with enough SVs, the game is unable to sort added SVs in time
+      --local sorted_svs = correctSVIndexsAtEnd(map.ScrollVelocities, old_sv_count + 1)
+      local sorted_svs = table.sort(map.ScrollVelocities, function(a, b) return a.StartTime < b.StartTime end)
+      
+      local newPositions = {}
+      for _, time in pairs(noteTimes) do
+          table.insert(newPositions, getPositionFromTime(time, sorted_svs))
+      end
+      
+      debug = debug .. (", " .. (newPositions[1] or "error"))
+      
+      for i = 1, #noteTimes do
+          displace(noteTimes[i], (notePositions[i] - newPositions[i]) / 100, tp_increment, sorted_svs)
+      end
+  end
 end
 
 function sv(time, multiplier) return utils.CreateScrollVelocity(time, multiplier) end
