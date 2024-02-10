@@ -55,7 +55,6 @@ function draw()
       if (#state.SelectedHitObjects >= 2) then
         groups = convertObjectsToRanges(state.SelectedHitObjects)
         for _, group in pairs(groups) do
-          imgui.Text(group.startTime .. ' my nuts ' .. group.endTime)
           vibratoSetup(group.startTime, group.endTime, amplitude, increment, stopamplitude, tp_increment, oneSided, preserveNotePositions, useSnap)
         end
       end
